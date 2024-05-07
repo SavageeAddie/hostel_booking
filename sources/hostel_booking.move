@@ -1,144 +1,122 @@
 module hostel_booking::hostel_booking {
-
-    // Imports
     use sui::transfer;
     use sui::sui::SUI;
-    use std::string::{Self, String};
-    use sui::coin::{Self, Coin};
-    use sui::clock::{Self, Clock};
+    use std::string::String;
+    use sui::coin::Coin;
+    use sui::clock::Clock;
     use sui::object::{Self, UID, ID};
-    use sui::balance::{Self, Balance};
-    use sui::tx_context::{Self, TxContext};
-    use sui::table::{Self, Table};
-    // use std::option::{Option, none, some, is_some, contains, borrow};
+    use sui::balance::Balance;
+    use sui::tx_context::TxContext;
+    use sui::table::Table;
 
-    // Errors
-    const EInsufficientFunds: u64 = 1;
-    const EInvalidCoin: u64 = 2;
-    const ENotStudent: u64 = 3;
-    // const EInvalidHostel: u64 = 4;
-    const EInvalidRoom: u64 = 5;
-    const ENotInstitution: u64 = 6;
-    const EInvalidHostelBooking: u64 = 7;
-
-    // HostelBooking Institution 
+    // Constants for error codes
+    const E_INSUFFICIENT_FUNDS: u64 = 1;
+    const E_INVALID_COIN: u64 = 2;
+    const E_NOT_STUDENT: u64 = 3;
+    const E_INVALID_ROOM: u64 = 5;
+    const E_NOT_INSTITUTION: u64 = 6;
+    const E_INVALID_HOSTEL_BOOKING: u64 = 7;
 
     struct Institution has key {
         id: UID,
         name: String,
-        student_fees: Table<ID, u64>, // student_id -> fees
+        student_fees: Table<ID, u64>, // Map of student_id to fees
         balance: Balance<SUI>,
-        memos: Table<ID, RoomMemo>, // student_id -> memo
-        institution: address
+        memos: Table<ID, RoomMemo>, // Map of student_id to RoomMemo
+        institution_address: address
     }
-
-    // Student
 
     struct Student has key {
         id: UID,
         name: String,
-        student: address,
+        student_address: address,
         institution_id: ID,
         balance: Balance<SUI>,
     }
-
-    // RoomMemo
 
     struct RoomMemo has key, store {
         id: UID,
         room_id: ID,
         semester_payment: u64,
-        student_fee: u64, //This is the mimimum fee that the student has to pay
-        institution: address 
+        minimum_fee: u64, // Minimum fee that the student has to pay
+        institution_address: address 
     }
-
-    // Hostel
 
     struct HostelRoom has key {
         id: UID,
         name: String,
-        room_size : u64,
-        institution: address,
+        room_size: u64,
+        institution_address: address,
         beds_available: u64,
     }
-
-    // Record of Hostel Booking
 
     struct BookingRecord has key, store {
         id: UID,
         student_id: ID,
         room_id: ID,
-        student: address,
-        institution: address,
+        student_address: address,
+        institution_address: address,
         paid_fee: u64,
         semester_payment: u64,
         booking_time: u64
     }
 
-    // Create a new Institution object 
-
-    public fun create_institution(ctx:&mut TxContext, name: String) {
+    // Create a new Institution object
+    public fun create_institution(ctx: &mut TxContext, name: String) {
         let institution = Institution {
             id: object::new(ctx),
-            name: name,
-            student_fees: table::new<ID, u64>(ctx),
-            balance: balance::zero<SUI>(),
-            memos: table::new<ID, RoomMemo>(ctx),
-            institution: tx_context::sender(ctx)
+            name,
+            student_fees: Table::new(ctx),
+            balance: Balance::zero(),
+            memos: Table::new(ctx),
+            institution_address: tx_context::sender(ctx)
         };
-
         transfer::share_object(institution);
     }
 
     // Create a new Student object
-
-    public fun create_student(ctx:&mut TxContext, name: String, institution_address: address) {
-        let institution_id_: ID = object::id_from_address(institution_address);
+    public fun create_student(ctx: &mut TxContext, name: String, institution_address: address) {
+        let institution_id = object::id_from_address(institution_address);
         let student = Student {
             id: object::new(ctx),
-            name: name,
-            student: tx_context::sender(ctx),
-            institution_id: institution_id_,
-            balance: balance::zero<SUI>(),
+            name,
+            student_address: tx_context::sender(ctx),
+            institution_id,
+            balance: Balance::zero(),
         };
-
         transfer::share_object(student);
     }
 
-    // create a memo for a room
-
+    // Create a memo for a room
     public fun create_room_memo(
         institution: &mut Institution,
         semester_payment: u64,
-        student_fee: u64,
+        minimum_fee: u64,
         room_name: vector<u8>,
         room_size: u64,
         beds_available: u64,
         ctx: &mut TxContext
-    ): HostelRoom{
-        assert!(institution.institution == tx_context::sender(ctx), ENotInstitution);
+    ): HostelRoom {
+        assert!(institution.institution_address == tx_context::sender(ctx), E_NOT_INSTITUTION);
         let room = HostelRoom {
             id: object::new(ctx),
             name: string::utf8(room_name),
-            room_size: room_size,
-            institution: institution.institution,
-            beds_available: beds_available
+            room_size,
+            institution_address: institution.institution_address,
+            beds_available
         };
         let memo = RoomMemo {
             id: object::new(ctx),
             room_id: object::uid_to_inner(&room.id),
-            semester_payment: semester_payment,
-            student_fee: student_fee, //Minimum fee that the student has to pay
-            institution: institution.institution
+            semester_payment,
+            minimum_fee,
+            institution_address: institution.institution_address
         };
-
-        table::add<ID, RoomMemo>(&mut institution.memos, object::uid_to_inner(&room.id), memo);
-
+        Table::add(&mut institution.memos, object::uid_to_inner(&room.id), memo);
         room
     }
 
     // Book a room
-
     public fun book_room(
         institution: &mut Institution,
         student: &mut Student,
@@ -147,51 +125,39 @@ module hostel_booking::hostel_booking {
         clock: &Clock,
         ctx: &mut TxContext
     ): Coin<SUI> {
-        assert!(institution.institution == tx_context::sender(ctx), ENotInstitution);
-        assert!(student.institution_id == object::id_from_address(institution.institution), ENotStudent);
-        assert!(table::contains<ID, RoomMemo>(&institution.memos, room_memo_id), EInvalidHostelBooking);
-        assert!(room.institution == institution.institution, EInvalidRoom);
-        assert!(room.beds_available > 0, EInvalidRoom);
-        let room_id = &room.id;
-        let memo = table::borrow<ID, RoomMemo>(&institution.memos, room_memo_id);
+        assert!(institution.institution_address == tx_context::sender(ctx), E_NOT_INSTITUTION);
+        assert!(student.institution_id == object::id_from_address(institution.institution_address), E_NOT_STUDENT);
+        assert!(Table::contains(&institution.memos, room_memo_id), E_INVALID_HOSTEL_BOOKING);
+        assert!(room.institution_address == institution.institution_address, E_INVALID_ROOM);
+        assert!(room.beds_available > 0, E_INVALID_ROOM);
 
-        let student_id = object::uid_to_inner(&student.id);
-        
-        let student_fee = memo.student_fee;
-        let semester_payment = memo.semester_payment;
-        let booking_time = clock::timestamp_ms(clock);
+        let memo = Table::borrow(&institution.memos, room_memo_id);
+        let booking_time = Clock::timestamp_ms(clock);
         let booking_record = BookingRecord {
             id: object::new(ctx),
-            student_id:student_id ,
-            room_id: object::uid_to_inner(room_id),
-            student: student.student,
-            institution: institution.institution,
-            paid_fee: student_fee,
-            semester_payment: semester_payment,
-            booking_time: booking_time
+            student_id: object::uid_to_inner(&student.id),
+            room_id: object::uid_to_inner(&room.id),
+            student_address: student.student_address,
+            institution_address: institution.institution_address,
+            paid_fee: memo.minimum_fee,
+            semester_payment: memo.semester_payment,
+            booking_time
         };
-
         transfer::public_freeze_object(booking_record);
-        // deduct the student fee from the student balance and add it to the institution balance
-        let total_pay = student_fee + semester_payment;
-        assert!(total_pay <= balance::value(&student.balance), EInsufficientFunds);
-        let amount_to_pay = coin::take(&mut student.balance, total_pay, ctx);
-        let same_amount_to_pay = coin::take(&mut student.balance, total_pay, ctx);
-        assert!(coin::value(&amount_to_pay) > 0, EInvalidCoin);
-        assert!(coin::value(&same_amount_to_pay) > 0, EInvalidCoin);
 
-        transfer::public_transfer(amount_to_pay, institution.institution);
+        // Deduct the total fee from the student balance and add it to the institution balance
+        let total_fee = memo.minimum_fee + memo.semester_payment;
+        assert!(total_fee <= Balance::value(&student.balance), E_INSUFFICIENT_FUNDS);
+        let amount_to_pay = Coin::take(&mut student.balance, total_fee, ctx);
+        assert!(Coin::value(&amount_to_pay) > 0, E_INVALID_COIN);
 
-        table::add<ID, u64>(&mut institution.student_fees, student_id, student_fee);
-        
-        // calculate total pay and deduct it from the student balance
-        room.beds_available = room.beds_available - 1;
+        transfer::public_transfer(amount_to_pay, institution.institution_address);
+        Table::add(&mut institution.student_fees, object::uid_to_inner(&student.id), memo.minimum_fee);
 
-        // remove Memo from the institution
-        let RoomMemo{id: _room_id, room_id: _, semester_payment: _, student_fee: _, institution: _} = table::remove<ID, RoomMemo>(&mut institution.memos, room_memo_id);
-        object::delete(_room_id);
+        room.beds_available -= 1;
+        let _ = Table::remove(&mut institution.memos, room_memo_id);
 
-        same_amount_to_pay
+        amount_to_pay
     }
 
     // Student adding funds to their account
@@ -241,32 +207,50 @@ module hostel_booking::hostel_booking {
     }
     
     // Transfer the Ownership of the room to the student
-
     public entry fun transfer_room_ownership(
         student: &Student,
-        room: HostelRoom,
+        room: &mut HostelRoom,
+        ctx: &mut TxContext
     ){
-        transfer::transfer(room, student.student);
+        assert!(room.beds_available > 0, E_INVALID_ROOM); // Ensure there's an available bed
+        assert!(room.institution_address == tx_context::sender(ctx), E_NOT_INSTITUTION);
+        transfer::transfer(room, student.student_address);
+        room.beds_available -= 1; // Decrement available beds as it's now owned by a student
     }
 
-
-    // Student Returns the room ownership
-    // Only increment the beds available in the room
-
+    // Student returns the room ownership
     public fun return_room(
         institution: &mut Institution,
         student: &mut Student,
         room: &mut HostelRoom,
         ctx: &mut TxContext
     ) {
-        assert!(institution.institution == tx_context::sender(ctx), ENotInstitution);
-        assert!(student.institution_id == object::id_from_address(institution.institution), ENotStudent);
-        assert!(room.institution == institution.institution, EInvalidRoom);
+        assert!(room.institution_address == institution.institution_address, E_INVALID_ROOM);
+        assert!(student.institution_id == object::id_from_address(institution.institution_address), E_NOT_STUDENT);
 
-        room.beds_available = room.beds_available + 1;
+        room.beds_available += 1; // Increment beds available since it's returned
     }
-    
-  
 
-    
+    // Add funds to a student's account
+    public fun top_up_student_balance(
+        student: &mut Student,
+        amount: Coin<SUI>,
+        ctx: &mut TxContext
+    ){
+        assert!(student.student_address == tx_context::sender(ctx), E_NOT_STUDENT);
+        Balance::join(&mut student.balance, Coin::into_balance(amount));
+    }
+
+    // Withdraw funds from the institution
+    public fun withdraw_funds(
+        institution: &mut Institution,
+        amount: u64,
+        ctx: &mut TxContext
+    ){
+        assert!(institution.institution_address == tx_context::sender(ctx), E_NOT_INSTITUTION);
+        assert!(amount <= Balance::value(&institution.balance), E_INSUFFICIENT_FUNDS);
+        let amount_to_withdraw = Coin::take(&mut institution.balance, amount, ctx);
+        transfer::public_transfer(amount_to_withdraw, institution.institution_address);
+    }
+
 }
